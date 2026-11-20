@@ -29,7 +29,7 @@ h1{font-size:clamp(23px,5vw,32px);margin:12px 0 7px}
 .custom-select select option{background:#172342;color:#fff}
 .custom-select:after{content:"⌄";position:absolute;left:14px;top:50%;transform:translateY(-55%);color:var(--blue);pointer-events:none}
 .primary{width:100%;border:0;border-radius:15px;padding:14px;font-weight:bold;transition:.2s;margin-top:15px;color:#10172e;background:linear-gradient(100deg,#8bdcff,#b7a5ff);box-shadow:0 7px 22px rgba(108,158,255,.2)}
-.primary:hover{transform:translateY(-1px)}.primary:disabled{opacity:.6;cursor:wait}
+.primary:hover{transform:translateY(-1px)}.primary:disabled{opacity:.6;cursor:wait}.location-button{width:100%;border:1px solid #65b9d2;border-radius:15px;padding:13px;font-weight:bold;color:#176d91;background:linear-gradient(100deg,#e8faff,#dff8f1);margin-top:12px}.location-button:disabled{opacity:.6;cursor:wait}
 .status{color:var(--muted);text-align:center;font-size:12px;min-height:18px;margin-top:11px}.error{color:#ffb5bd}.hidden{display:none!important}
 .weather-hero{position:relative;overflow:hidden;padding:23px;background:linear-gradient(125deg,rgba(95,151,255,.22),rgba(161,133,255,.12),rgba(255,255,255,.055))}
 .location{color:var(--muted);font-size:13px}.hero-main{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -71,6 +71,7 @@ footer{text-align:center;font-size:11px;color:#8795b8;margin-top:24px}
       <div class="field"><label for="province">استان</label><div class="custom-select"><select id="province"></select></div></div>
       <div class="field"><label for="city">شهر</label><div class="custom-select"><select id="city"></select></div></div>
     </div>
+    <button class="location-button" id="useMyLocation" type="button">📍 مکان من</button>
     <button class="primary" id="getWeather">☁️ دریافت آخرین وضعیت هوا</button>
     <div class="status" id="status" aria-live="polite">استان و شهر را انتخاب کنید.</div>
   </section>
@@ -179,7 +180,10 @@ const provinces = {
 };
 
 const $=id=>document.getElementById(id);
-const provinceSelect=$("province"),citySelect=$("city"),getButton=$("getWeather"),statusEl=$("status");
+const provinceSelect=$("province"),citySelect=$("city"),getButton=$("getWeather"),statusEl=$("status"),locationButton=$("useMyLocation");
+let currentCoordinates=null;
+provinceSelect.addEventListener("change",()=>{currentCoordinates=null;});
+citySelect.addEventListener("change",()=>{currentCoordinates=null;});
 function fillProvinces(){
  provinceSelect.innerHTML="";
  Object.keys(provinces).sort((a,b)=>a.localeCompare(b,"fa")).forEach(n=>provinceSelect.add(new Option(n,n)));
@@ -214,15 +218,16 @@ function makeAdvice(temp,rain,wind,uv){
  $("clothing").textContent=clothes;$("items").textContent=items.join("، ")+" همراه داشته باشید.";
 }
 function setStatus(m,err=false){statusEl.textContent=m;statusEl.classList.toggle("error",err)}
-async function loadWeather(){
- const province=provinceSelect.value,city=citySelect.value,[lat,lon]=provinces[province][city];
+async function loadWeather(coordinates=null, locationLabel=null){
+ const province=provinceSelect.value,city=citySelect.value;
+ const [lat,lon]=coordinates||provinces[province][city];
  getButton.disabled=true;getButton.textContent="در حال دریافت اطلاعات…";setStatus("در حال دریافت اطلاعات هواشناسی…");
  try{
   const params=new URLSearchParams({latitude:lat,longitude:lon,timezone:"auto",forecast_days:7,current:"temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,wind_speed_10m,wind_direction_10m",hourly:"temperature_2m,precipitation_probability,weather_code",daily:"weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max"});
   const response=await fetch("https://api.open-meteo.com/v1/forecast?"+params);
   if(!response.ok)throw Error("weather");
   const data=await response.json(),c=data.current,d=data.daily,cond=weatherInfo(c.weather_code,!!c.is_day);
-  $("location").textContent="📍 "+province+"، "+city;
+  $("location").textContent="📍 "+(locationLabel||(province+"، "+city));
   $("temperature").textContent=Math.round(c.temperature_2m);$("feels").textContent=Math.round(c.apparent_temperature);
   $("condition").textContent=cond.text;$("mainIcon").textContent=cond.icon;
   $("minmax").textContent="کمینه: "+Math.round(d.temperature_2m_min[0])+"° | بیشینه: "+Math.round(d.temperature_2m_max[0])+"°";
@@ -250,7 +255,29 @@ async function loadWeather(){
 $("aboutButton").addEventListener("click",()=>$("aboutModal").classList.remove("hidden"));
 $("closeAbout").addEventListener("click",()=>$("aboutModal").classList.add("hidden"));
 $("aboutModal").addEventListener("click",e=>{if(e.target===$("aboutModal"))$("aboutModal").classList.add("hidden")});
-getButton.addEventListener("click",loadWeather);
+getButton.addEventListener("click",()=>loadWeather());
+locationButton.addEventListener("click",()=>{
+ if(!("geolocation" in navigator)){setStatus("دسترسی موقعیت مکانی در این مرورگر پشتیبانی نمی‌شود.",true);return;}
+ locationButton.disabled=true;locationButton.textContent="در حال دریافت موقعیت…";setStatus("لطفاً اجازه دسترسی به موقعیت مکانی را صادر کنید.");
+ navigator.geolocation.getCurrentPosition(async position=>{
+  const coords=[position.coords.latitude,position.coords.longitude];currentCoordinates=coords;
+  let nearest=null,nearestDistance=Infinity;
+  for(const [p,cities] of Object.entries(provinces))for(const [name,point] of Object.entries(cities)){
+   const rad=x=>x*Math.PI/180, dLat=rad(point[0]-coords[0]),dLon=rad(point[1]-coords[1]);
+   const a=Math.sin(dLat/2)**2+Math.cos(rad(coords[0]))*Math.cos(rad(point[0]))*Math.sin(dLon/2)**2;
+   const km=6371*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+   if(km<nearestDistance){nearestDistance=km;nearest={province:p,city:name,point};}
+  }
+  let label="مکان من";
+  if(nearest&&nearestDistance<=40){provinceSelect.value=nearest.province;fillCities();citySelect.value=nearest.city;label=nearest.province+"، "+nearest.city;}
+  await loadWeather(coords,label);
+  locationButton.disabled=false;locationButton.textContent="📍 مکان من";
+ },error=>{
+  const messages={1:"اجازه دسترسی به موقعیت مکانی داده نشد. از تنظیمات برنامه، مجوز مکان را فعال کنید.",2:"موقعیت مکانی در دسترس نیست. GPS یا سرویس مکان‌یابی را بررسی کنید.",3:"دریافت موقعیت مکانی بیش از حد طول کشید. دوباره تلاش کنید."};
+  setStatus(messages[error.code]||"دریافت موقعیت مکانی ناموفق بود.",true);
+  locationButton.disabled=false;locationButton.textContent="📍 مکان من";
+ },{enableHighAccuracy:true,timeout:20000,maximumAge:60000});
+});
 fillProvinces();loadWeather();
 </script>
 </body>
